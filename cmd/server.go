@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+	gotelhttp "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -34,6 +37,16 @@ func main() {
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
+	// Initialise OpenTelemetry SDK (traces + metrics)
+	shutdownOtel, err := initOTel(context.Background())
+	if err != nil {
+		log.Fatalf("failed to initialise OpenTelemetry: %v", err)
+	}
+	defer shutdownOtel()
+
+	// Initialise metric instruments against the now-registered MeterProvider
+	initMetrics()
+
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
@@ -43,6 +56,8 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+	router.Use(otelSaturationMiddleware)
+	router.Use(otelFlowMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
@@ -84,6 +99,12 @@ func main() {
 	//	IndexFile:  "index.html",
 	//})
 
+	// Wrap the entire router with otelhttp so every request emits
+	// http.server.request.duration (histogram, seconds) with semconv attributes.
+	instrumentedRouter := gotelhttp.NewHandler(router, "",
+		gotelhttp.WithServerName(serviceName),
+	)
+
 	// Start the API server, this function will block until the server is stopped
-	api.StartServer(serverPort, router, 10*time.Second)
+	api.StartServer(serverPort, instrumentedRouter, 10*time.Second)
 }
