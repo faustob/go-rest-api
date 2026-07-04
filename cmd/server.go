@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+	contribotelhttp "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -34,15 +37,34 @@ func main() {
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
+	// Initialise OpenTelemetry SDK (traces + metrics) and register as global
+	shutdownOtel, err := initOTel(context.Background())
+	if err != nil {
+		log.Printf("### ⚠️  OTel init failed: %v", err)
+	} else {
+		defer shutdownOtel()
+		if merr := initMetrics(); merr != nil {
+			log.Printf("### ⚠️  OTel metrics init failed: %v", merr)
+		}
+	}
+
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
+
+	// Wrap the entire router with otelhttp so every request is traced and
+	// http.server.request.duration is emitted with semconv attributes.
+	// We do this after building the router so the handler is fully wired.
 
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
 	router.Use(middleware.RealIP)
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// Telemetry middleware: active requests saturation SLI + flow SLIs
+	router.Use(activeRequestsMiddleware)
+	router.Use(flowTelemetryMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
@@ -55,6 +77,7 @@ func main() {
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
 		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(jwtValidationTelemetryMiddleware)
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)
@@ -84,6 +107,14 @@ func main() {
 	//	IndexFile:  "index.html",
 	//})
 
+	// Wrap the chi router with otelhttp middleware so every request emits
+	// http.server.request.duration (histogram, seconds) with semconv attributes:
+	// http.request.method, http.route, http.response.status_code, url.scheme.
+	// otelhttp also starts a server span per request for tracing.
+	otelHandler := contribotelhttp.NewHandler(router, "go-rest-api",
+		contribotelhttp.WithMessageEvents(contribotelhttp.ReadEvents, contribotelhttp.WriteEvents),
+	)
+
 	// Start the API server, this function will block until the server is stopped
-	api.StartServer(serverPort, router, 10*time.Second)
+	api.StartServer(serverPort, otelHandler, 10*time.Second)
 }
