@@ -99,5 +99,9 @@ func main() {
 	otelHandler := contribotelhttp.NewHandler(router, serviceName)
 
 	// Start the API server, this function will block until the server is stopped
-	api.StartServer(serverPort, otelHandler, 10*time.Second)
+	// otelHandler is an http.Handler; wrap it in a plain http.ServeMux so it satisfies
+	// the chi.Router interface expected by StartServer.
+	mux := http.NewServeMux()
+	mux.Handle("/", otelHandler)
+	api.StartServer(serverPort, mux, 10*time.Second)
 }
