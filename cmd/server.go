@@ -20,7 +20,7 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
-	gootelhttp "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	otelhttp "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -97,7 +97,7 @@ func main() {
 
 	// Wrap the router with otelhttp so every request emits
 	// http.server.request.duration (histogram, seconds) with semconv attributes.
-	instrumentedRouter := goodtelhttp.NewHandler(router, serviceName)
+	instrumentedRouter := otelhttp.NewHandler(router, serviceName)
 
 	// Start the API server, this function will block until the server is stopped
 	api.StartServer(serverPort, instrumentedRouter, 10*time.Second)
