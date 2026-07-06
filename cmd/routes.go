@@ -10,9 +10,13 @@ package main
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ThingResp struct {
@@ -21,6 +25,21 @@ type ThingResp struct {
 
 // Get all things, dummy implementation
 func (api ThingAPI) getThings(resp http.ResponseWriter, req *http.Request) {
+	start := time.Now()
+	tracer := otel.Tracer("go-rest-api")
+	ctx, span := tracer.Start(req.Context(), "getThings")
+	defer func() {
+		elapsed := time.Since(start).Seconds()
+		if elapsed > 0.75 {
+			span.AddEvent("slow-request", trace.WithAttributes(
+				attribute.Float64("handler.duration_s", elapsed),
+				attribute.String("http.route", "/things"),
+			))
+		}
+		span.End()
+	}()
+	_ = ctx
+
 	things := make([]ThingResp, 0)
 
 	things = append(things, ThingResp{
@@ -35,6 +54,21 @@ func (api ThingAPI) getThings(resp http.ResponseWriter, req *http.Request) {
 
 // Get a thing by ID, dummy implementation
 func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
+	start := time.Now()
+	tracer := otel.Tracer("go-rest-api")
+	ctx, span := tracer.Start(req.Context(), "getThingByID")
+	defer func() {
+		elapsed := time.Since(start).Seconds()
+		if elapsed > 0.75 {
+			span.AddEvent("slow-request", trace.WithAttributes(
+				attribute.Float64("handler.duration_s", elapsed),
+				attribute.String("http.route", "/things/{id}"),
+			))
+		}
+		span.End()
+	}()
+	_ = ctx
+
 	id := chi.URLParam(req, "id")
 
 	// Example of using problem package to send a 404
@@ -52,11 +86,38 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 
 // Create a new thing, dummy implementation
 func (api ThingAPI) createThing(resp http.ResponseWriter, req *http.Request) {
+	start := time.Now()
+	tracer := otel.Tracer("go-rest-api")
+	_, span := tracer.Start(req.Context(), "createThing")
+	defer func() {
+		elapsed := time.Since(start).Seconds()
+		if elapsed > 0.75 {
+			span.AddEvent("slow-request", trace.WithAttributes(
+				attribute.Float64("handler.duration_s", elapsed),
+				attribute.String("http.route", "/things"),
+			))
+		}
+		span.End()
+	}()
 	api.ReturnOKJSON(resp)
 }
 
 // Delete a thing by ID, dummy implementation
 func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
+	start := time.Now()
+	tracer := otel.Tracer("go-rest-api")
+	_, span := tracer.Start(req.Context(), "deleteThing")
+	defer func() {
+		elapsed := time.Since(start).Seconds()
+		if elapsed > 0.75 {
+			span.AddEvent("slow-request", trace.WithAttributes(
+				attribute.Float64("handler.duration_s", elapsed),
+				attribute.String("http.route", "/things/{id}"),
+			))
+		}
+		span.End()
+	}()
+
 	id := chi.URLParam(req, "id")
 
 	// Example of using problem package to send a 404

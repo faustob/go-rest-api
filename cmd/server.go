@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+	gootelhttp "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -84,6 +87,18 @@ func main() {
 	//	IndexFile:  "index.html",
 	//})
 
+	// Initialise OpenTelemetry SDK (traces + metrics) and register as global.
+	shutdownOtel, err := initOTel(context.Background())
+	if err != nil {
+		log.Printf("### ⚠️  OpenTelemetry init failed: %v", err)
+	} else {
+		defer shutdownOtel()
+	}
+
+	// Wrap the router with otelhttp so every request emits
+	// http.server.request.duration (histogram, seconds) with semconv attributes.
+	instrumentedRouter := goodtelhttp.NewHandler(router, serviceName)
+
 	// Start the API server, this function will block until the server is stopped
-	api.StartServer(serverPort, router, 10*time.Second)
+	api.StartServer(serverPort, instrumentedRouter, 10*time.Second)
 }
