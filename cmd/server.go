@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	chiv5middleware "github.com/go-chi/chi/v5/middleware"
 
 	_ "github.com/joho/godotenv/autoload"
 
@@ -114,7 +115,7 @@ func main() {
 	// OTel HTTP middleware — emits http.server.request.duration histogram and traces per request
 	router.Use(otelhttp.NewMiddleware(serviceName,
 		otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
-			if routeCtx := chiMiddleware.RouteContext(r.Context()); routeCtx != nil && routeCtx.RoutePattern() != "" {
+			if routeCtx := chiv5middleware.RouteContext(r.Context()); routeCtx != nil && routeCtx.RoutePattern() != "" {
 				return routeCtx.RoutePattern()
 			}
 			return operation
@@ -163,7 +164,7 @@ func main() {
 	//})
 
 	// Start the API server, this function will block until the server is stopped
-	_ = chiMiddleware.RouteContext // ensure import used
+	_ = chiMiddleware.Recoverer // ensure chi/v5/middleware import used via chiMiddleware
 	registerSaturationGauges()
 	api.StartServer(serverPort, router, 10*time.Second)
 }
