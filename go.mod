@@ -5,6 +5,12 @@ go 1.22
 toolchain go1.24.3
 
 require (
+	go.opentelemetry.io/otel v1.35.0
+	go.opentelemetry.io/otel/sdk v1.35.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.35.0
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.35.0
+	go.opentelemetry.io/otel/sdk/metric v1.35.0
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.60.0
 	github.com/MicahParks/keyfunc/v2 v2.1.0
 	github.com/elastic/go-sysinfo v1.15.3
 	github.com/go-chi/chi v4.1.1+incompatible
