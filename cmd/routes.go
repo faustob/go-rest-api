@@ -8,7 +8,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"time"
