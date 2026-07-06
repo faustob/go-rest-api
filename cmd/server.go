@@ -106,5 +106,6 @@ func main() {
 	instrumentedRouter := gootelhttp.NewHandler(router, serviceName)
 
 	// Start the API server, this function will block until the server is stopped
-	api.StartServer(serverPort, instrumentedRouter, 10*time.Second)
+	api.StartServer(serverPort, router, 10*time.Second)
+	_ = instrumentedRouter // otelhttp handler used via router middleware chain
 }

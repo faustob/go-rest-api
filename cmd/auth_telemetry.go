@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // authTelemetryMiddleware wraps an inner http.Handler (typically the JWT
@@ -45,6 +46,6 @@ func authTelemetryMiddleware(next http.Handler) http.Handler {
 			attrs = append(attrs, attribute.String("denial.reason", reason))
 		}
 
-		globalMetrics.authAttempts.Add(ctx, 1, attrs...)
+		globalMetrics.authAttempts.Add(ctx, 1, metric.WithAttributes(attrs...))
 	})
 }

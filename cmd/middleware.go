@@ -15,6 +15,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -40,7 +41,7 @@ func flowTelemetryMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Flow entry counter (throughput SLI).
-		globalMetrics.flowEntries.Add(ctx, 1, attrs...)
+		globalMetrics.flowEntries.Add(ctx, 1, metric.WithAttributes(attrs...))
 
 		// Validation outcome — treat presence of Authorization header as the
 		// validation gate; absence is a validation failure for protected paths.
@@ -50,8 +51,10 @@ func flowTelemetryMiddleware(next http.Handler) http.Handler {
 			validationOutcome = "fail"
 		}
 		globalMetrics.flowValidationOutcomes.Add(ctx, 1,
-			attribute.String("http.request.method", r.Method),
-			attribute.String("outcome", validationOutcome),
+			metric.WithAttributes(
+				attribute.String("http.request.method", r.Method),
+				attribute.String("outcome", validationOutcome),
+			),
 		)
 
 		// Track in-flight requests for saturation SLI.
@@ -79,10 +82,10 @@ func flowTelemetryMiddleware(next http.Handler) http.Handler {
 		}
 
 		// flow.outcomes (success/failure SLI).
-		globalMetrics.flowOutcomes.Add(ctx, 1, flowAttrs...)
+		globalMetrics.flowOutcomes.Add(ctx, 1, metric.WithAttributes(flowAttrs...))
 
 		// flow.duration (latency / freshness SLI).
-		globalMetrics.flowDuration.Record(ctx, duration, flowAttrs...)
+		globalMetrics.flowDuration.Record(ctx, duration, metric.WithAttributes(flowAttrs...))
 
 		// Slow-request span event for P99 triage (latency P99 SLI).
 		if duration > p99BudgetSeconds {
