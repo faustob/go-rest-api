@@ -62,17 +62,17 @@ var ActiveRequestsUpDown metric.Int64UpDownCounter
 // ---- Attribute helpers ---------------------------------------------------
 
 // AttrFlowRoute returns a low-cardinality route attribute for flow metrics.
-func AttrFlowRoute(route string) attribute.KeyValue {
-	return attribute.String("http.route", route)
+func AttrFlowRoute(route string) metric.MeasurementOption {
+	return metric.WithAttributes(attribute.String("http.route", route))
 }
 
 // AttrTenant extracts the X-Tenant-ID header (falls back to "unknown").
-func AttrTenant(r *http.Request) attribute.KeyValue {
+func AttrTenant(r *http.Request) metric.MeasurementOption {
 	tenant := r.Header.Get("X-Tenant-ID")
 	if tenant == "" {
 		tenant = "unknown"
 	}
-	return attribute.String("tenant.id", tenant)
+	return metric.WithAttributes(attribute.String("tenant.id", tenant))
 }
 
 // ---- SDK bootstrap -------------------------------------------------------
