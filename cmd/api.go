@@ -32,7 +32,7 @@ func (api ThingAPI) addProtectedRoutes(r chi.Router) {
 
 func NewThingAPI() ThingAPI {
 	return ThingAPI{
-		api.NewBase(serviceName, version, buildInfo, healthy),
+		Base: api.NewBase(serviceName, version, buildInfo, healthy),
 		// Database connections, SDK clients, etc can be added here
 	}
 }
