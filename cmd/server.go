@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -20,6 +22,15 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	_ "github.com/joho/godotenv/autoload"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 var (
@@ -30,15 +41,72 @@ var (
 	defaultPort = 8000
 )
 
+func initOTel(ctx context.Context) (func(context.Context) error, error) {
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName(serviceName),
+			semconv.ServiceVersion(version),
+		),
+		resource.WithFromEnv(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	traceExporter, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(traceExporter),
+		sdktrace.WithResource(res),
+	)
+	otel.SetTracerProvider(tp)
+
+	metricExporter, err := otlpmetricgrpc.New(ctx)
+	if err != nil {
+		return nil, err
+	}
+	mp := metric.NewMeterProvider(
+		metric.WithReader(metric.NewPeriodicReader(metricExporter)),
+		metric.WithResource(res),
+	)
+	otel.SetMeterProvider(mp)
+
+	return func(ctx context.Context) error {
+		if err := tp.Shutdown(ctx); err != nil {
+			return err
+		}
+		return mp.Shutdown(ctx)
+	}, nil
+}
+
 func main() {
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
+
+	// Initialise OpenTelemetry SDK
+	ctx := context.Background()
+	shutdownOTel, err := initOTel(ctx)
+	if err != nil {
+		log.Printf("### ⚠️  OTel init failed (continuing without telemetry): %v", err)
+	} else {
+		registerSaturationMetrics()
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := shutdownOTel(shutdownCtx); err != nil {
+				log.Printf("### ⚠️  OTel shutdown error: %v", err)
+			}
+		}()
+	}
 
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
 
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
+	router.Use(otelhttp.NewMiddleware(serviceName))
 	router.Use(middleware.RealIP)
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
@@ -55,6 +123,7 @@ func main() {
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
 		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(AuthMetricsMiddleware)
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)
