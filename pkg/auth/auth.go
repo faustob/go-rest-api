@@ -15,6 +15,9 @@ import (
 
 	"github.com/MicahParks/keyfunc/v2"
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // JWTValidator is a struct that can be used to protect routes
@@ -60,13 +63,18 @@ func NewPassthroughValidator() PassthroughValidator {
 func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			telemetry.RecordAuthAttempt(r.Context(), "denied", "jwt_validation_failed")
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 
+		telemetry.RecordAuthAttempt(r.Context(), "allowed", "")
 		next.ServeHTTP(w, r)
 	})
 }
+
+// Ensure attribute import is used (compile guard)
+var _ = attribute.String
 
 // Protect can be added around any route handler to enforce JWT auth
 func (v JWTValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
