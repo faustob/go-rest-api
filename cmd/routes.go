@@ -62,7 +62,6 @@ var flowValidationOutcomes, _ = routesMeter.Int64Counter(
 	metric.WithUnit("{validation}"),
 )
 
-
 // Get all things, dummy implementation
 func (api ThingAPI) getThings(resp http.ResponseWriter, req *http.Request) {
 	start := time.Now()
