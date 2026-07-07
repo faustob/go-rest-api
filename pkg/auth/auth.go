@@ -15,7 +15,26 @@ import (
 
 	"github.com/MicahParks/keyfunc/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
+
+// authAttempts counts every authentication decision, labelled by outcome and denial reason.
+var authAttempts metric.Int64Counter
+
+func init() {
+	meter := otel.Meter("github.com/benc-uk/go-rest-api/pkg/auth")
+	var err error
+	authAttempts, err = meter.Int64Counter(
+		"auth.attempts",
+		metric.WithDescription("Total authentication attempts, labelled by outcome and denial reason."),
+		metric.WithUnit("{attempt}"),
+	)
+	if err != nil {
+		log.Printf("### ⚠️  OTel: failed to create auth.attempts counter: %v", err)
+	}
+}
 
 // JWTValidator is a struct that can be used to protect routes
 type JWTValidator struct {
@@ -59,11 +78,27 @@ func NewPassthroughValidator() PassthroughValidator {
 // Middleware returns middleware to enforce JWT auth on all routes
 func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+		outcome, reason := validateRequestWithReason(r, v.clientID, v.scope, v.jwks)
+		if !outcome {
+			if authAttempts != nil {
+				authAttempts.Add(r.Context(), 1,
+					metric.WithAttributes(
+						attribute.String("outcome", "denied"),
+						attribute.String("denial.reason", reason),
+					),
+				)
+			}
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-
+		if authAttempts != nil {
+			authAttempts.Add(r.Context(), 1,
+				metric.WithAttributes(
+					attribute.String("outcome", "allowed"),
+					attribute.String("denial.reason", ""),
+				),
+			)
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -71,11 +106,27 @@ func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 // Protect can be added around any route handler to enforce JWT auth
 func (v JWTValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+		outcome, reason := validateRequestWithReason(r, v.clientID, v.scope, v.jwks)
+		if !outcome {
+			if authAttempts != nil {
+				authAttempts.Add(r.Context(), 1,
+					metric.WithAttributes(
+						attribute.String("outcome", "denied"),
+						attribute.String("denial.reason", reason),
+					),
+				)
+			}
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-
+		if authAttempts != nil {
+			authAttempts.Add(r.Context(), 1,
+				metric.WithAttributes(
+					attribute.String("outcome", "allowed"),
+					attribute.String("denial.reason", ""),
+				),
+			)
+		}
 		next.ServeHTTP(w, r)
 	}
 }
@@ -92,6 +143,53 @@ func (v PassthroughValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
 	}
+}
+
+// validateRequestWithReason validates a request and returns (allowed, denialReason).
+func validateRequestWithReason(r *http.Request, clientID string, scope string, jwks *keyfunc.JWKS) (bool, string) {
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) == 0 {
+		return false, "missing_token"
+	}
+
+	authParts := strings.Split(authHeader, " ")
+	if len(authParts) != 2 {
+		return false, "malformed_header"
+	}
+
+	if strings.ToLower(authParts[0]) != "bearer" {
+		return false, "invalid_scheme"
+	}
+
+	if jwks == nil {
+		log.Printf("### 🔐 Auth: No JWKS, cannot validate token, denying access")
+		return false, "jwks_unavailable"
+	}
+
+	token, err := jwt.Parse(authParts[1], jwks.Keyfunc)
+	if err != nil {
+		log.Printf("### 🔐 Auth: Failed to parse the JWT. Error: %s", err)
+		return false, "invalid_token"
+	}
+
+	claims := token.Claims.(jwt.MapClaims)
+
+	if !strings.Contains(claims["scp"].(string), scope) {
+		log.Printf("### 🔐 Auth: Scope '%s' is missing from token scope '%s'", scope, claims["scp"])
+		return false, "insufficient_scope"
+	}
+
+	audience := claims["aud"]
+	if strings.HasPrefix(audience.(string), "api://") {
+		audience = strings.TrimPrefix(audience.(string), "api://")
+	}
+
+	if audience != clientID {
+		log.Printf("### 🔐 Auth: Token audience '%s' does not match '%s'", claims["aud"], clientID)
+		return false, "audience_mismatch"
+	}
+
+	return true, ""
 }
 
 // validateRequest is an internal function to validate a request

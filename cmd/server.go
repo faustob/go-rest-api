@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -15,9 +17,11 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+	"github.com/riandyrn/otelchi"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,6 +35,18 @@ var (
 )
 
 func main() {
+	// Initialise OpenTelemetry SDK — must happen before any instrumented code runs.
+	shutdownOtel, err := telemetry.InitSDK(context.Background(), serviceName)
+	if err != nil {
+		log.Printf("### ⚠️  OTel SDK init failed (continuing without telemetry): %v", err)
+	} else {
+		defer func() {
+			if sdkErr := shutdownOtel(context.Background()); sdkErr != nil {
+				log.Printf("### ⚠️  OTel SDK shutdown error: %v", sdkErr)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -38,8 +54,15 @@ func main() {
 	router := chi.NewRouter()
 	api := NewThingAPI()
 
+	// Register saturation (active-requests + pool-size) observable gauges.
+	if satErr := telemetry.RegisterSaturationCallback(serverPort); satErr != nil {
+		log.Printf("### ⚠️  OTel saturation callback registration failed: %v", satErr)
+	}
+
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
 	router.Use(middleware.RealIP)
+	// OpenTelemetry HTTP server instrumentation (emits http.server.request.duration).
+	router.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(router)))
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
