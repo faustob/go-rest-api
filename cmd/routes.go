@@ -26,8 +26,8 @@ import (
 const p99BudgetSeconds = 0.750
 
 var (
-	routesMeter   = otel.Meter("go-rest-api/routes")
-	routesTracer  = otel.Tracer("go-rest-api/routes")
+	routesMeter  = otel.Meter("go-rest-api/routes")
+	routesTracer = otel.Tracer("go-rest-api/routes")
 
 	// flow.outcomes counter — E2E business flow success/failure
 	flowOutcomes metric.Int64Counter
