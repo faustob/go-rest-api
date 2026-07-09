@@ -8,6 +8,9 @@
 package main
 
 import (
+	"context"
+	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"time"
@@ -15,9 +18,11 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,6 +36,19 @@ var (
 )
 
 func main() {
+	// Bootstrap OpenTelemetry SDK (tracer + meter providers) and register globally
+	ctx := context.Background()
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx, serviceName)
+	if err != nil {
+		log.Printf("### ⚠️  Failed to initialize OpenTelemetry: %v", err)
+	} else {
+		defer func() {
+			if shutdownErr := otelShutdown(context.Background()); shutdownErr != nil {
+				log.Printf("### ⚠️  Error shutting down OpenTelemetry: %v", shutdownErr)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -38,11 +56,22 @@ func main() {
 	router := chi.NewRouter()
 	api := NewThingAPI()
 
+	// Initialize business-flow and auth telemetry instruments
+	if tmErr := telemetry.InitInstruments(); tmErr != nil {
+		log.Printf("### ⚠️  Failed to initialize telemetry instruments: %v", tmErr)
+	}
+
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
 	router.Use(middleware.RealIP)
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+	// OTel HTTP server instrumentation: emits http.server.request.duration histogram
+	router.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "http.server.request")
+	})
+	// Custom outcome/latency/auth/flow telemetry middleware
+	router.Use(telemetry.RequestTelemetryMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
@@ -55,6 +84,7 @@ func main() {
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
 		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(telemetry.AuthTelemetryMiddleware)
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)

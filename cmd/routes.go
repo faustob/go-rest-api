@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -37,6 +38,10 @@ func (api ThingAPI) getThings(resp http.ResponseWriter, req *http.Request) {
 func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 	id := chi.URLParam(req, "id")
 
+	// Per-step validation span for the primary business flow
+	valid := id == "1"
+	telemetry.RecordValidationStep(req.Context(), "thing.id", valid)
+
 	// Example of using problem package to send a 404
 	if id != "1" {
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
@@ -58,6 +63,10 @@ func (api ThingAPI) createThing(resp http.ResponseWriter, req *http.Request) {
 // Delete a thing by ID, dummy implementation
 func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
 	id := chi.URLParam(req, "id")
+
+	// Per-step validation span for the primary business flow
+	valid := id == "1"
+	telemetry.RecordValidationStep(req.Context(), "thing.id", valid)
 
 	// Example of using problem package to send a 404
 	if id != "1" {
