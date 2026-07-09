@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"regexp"
 	"time"
@@ -15,9 +16,12 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/otelconfig"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/contrib/instrumentation/github.com/go-chi/chi/otelchi"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,12 +35,25 @@ var (
 )
 
 func main() {
+	// Set up OpenTelemetry SDK (tracer + meter providers), registered globally
+	ctx := context.Background()
+	otelShutdown, err := otelconfig.SetupOTelSDK(ctx, serviceName)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		_ = otelShutdown(ctx)
+	}()
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
+
+	// otelchi middleware for HTTP server span/metric instrumentation (semconv http.server.request.duration)
+	router.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(router)))
 
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
 	router.Use(middleware.RealIP)
@@ -55,6 +72,7 @@ func main() {
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
 		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(otelconfig.AuthMetricsMiddleware)
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)
