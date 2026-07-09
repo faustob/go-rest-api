@@ -16,12 +16,12 @@ import (
 )
 
 var (
-	requestOutcomeCounter  metric.Int64Counter
-	authAttemptsCounter    metric.Int64Counter
-	flowOutcomeCounter     metric.Int64Counter
-	flowEntryCounter       metric.Int64Counter
-	activeRequestsGauge    metric.Int64ObservableGauge
-	workerPoolSizeGauge    metric.Int64ObservableGauge
+	requestOutcomeCounter metric.Int64Counter
+	authAttemptsCounter   metric.Int64Counter
+	flowOutcomeCounter    metric.Int64Counter
+	flowEntryCounter      metric.Int64Counter
+	activeRequestsGauge   metric.Int64ObservableGauge
+	workerPoolSizeGauge   metric.Int64ObservableGauge
 )
 
 // initInstruments creates all custom metric instruments against the given
