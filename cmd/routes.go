@@ -13,6 +13,7 @@ import (
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ThingResp struct {
@@ -39,6 +40,8 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		span := trace.SpanFromContext(req.Context())
+		span.SetAttributes(errorTypeAttr("NotFoundError"))
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
@@ -61,6 +64,8 @@ func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		span := trace.SpanFromContext(req.Context())
+		span.SetAttributes(errorTypeAttr("NotFoundError"))
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}

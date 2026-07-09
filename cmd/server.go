@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"regexp"
 	"time"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	otelchi "go.opentelemetry.io/contrib/instrumentation/github.com/go-chi/chi/v5/otelchi"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,6 +34,15 @@ var (
 )
 
 func main() {
+	// Set up OpenTelemetry SDK (tracer + meter providers) and register them globally
+	otelShutdown, err := initOTelSDK(context.Background())
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		_ = otelShutdown(context.Background())
+	}()
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -43,6 +55,12 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry HTTP server instrumentation, must be after Recoverer so panics are still recovered
+	router.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(router)))
+
+	// Custom telemetry: request outcome counter, auth attempts, saturation gauges
+	router.Use(requestOutcomeMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
