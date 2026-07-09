@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/contrib/instrumentation/github.com/go-chi/chi/otelchi"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,12 +35,31 @@ var (
 )
 
 func main() {
+	// Set up OpenTelemetry SDK (tracing + metrics) and register it globally
+	otelShutdown, err := setupOTel(context.Background(), serviceName)
+	if err != nil {
+		log.Printf("### ⚠️  OpenTelemetry setup failed: %v", err)
+	}
+	if otelShutdown != nil {
+		defer func() {
+			if err := otelShutdown(context.Background()); err != nil {
+				log.Printf("### ⚠️  OpenTelemetry shutdown error: %v", err)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
+
+	// OpenTelemetry HTTP server instrumentation (emits http.server.request.duration)
+	router.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(router)))
+
+	// Custom telemetry: request-outcome + primary business-flow instruments
+	router.Use(api.TelemetryOutcomeMiddleware)
 
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
 	router.Use(middleware.RealIP)
