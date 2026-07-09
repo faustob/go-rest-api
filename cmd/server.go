@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"net/http"
 	"os"
 	"regexp"
 	"time"
@@ -15,9 +17,12 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -34,6 +39,16 @@ func main() {
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
+	// Set up OpenTelemetry SDK (traces + metrics), registers global providers
+	ctx := context.Background()
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx, serviceName)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		_ = otelShutdown(ctx)
+	}()
+
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
@@ -43,6 +58,17 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry HTTP server instrumentation: emits http.server.request.duration
+	// with method/route/status attributes, plus our custom outcome/saturation metrics
+	router.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "http.server",
+			otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
+				return r.Method + " " + telemetry.RouteTemplate(r)
+			}),
+		)
+	})
+	router.Use(telemetry.RequestOutcomeMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
@@ -54,7 +80,7 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
-		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(telemetry.AuthOutcomeMiddleware(jwtValidator.Middleware))
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)
