@@ -13,6 +13,9 @@ import (
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ThingResp struct {
@@ -21,6 +24,12 @@ type ThingResp struct {
 
 // Get all things, dummy implementation
 func (api ThingAPI) getThings(resp http.ResponseWriter, req *http.Request) {
+	if requestsByTenantCounter != nil {
+		requestsByTenantCounter.Add(req.Context(), 1, metric.WithAttributes(
+			attribute.String("tenant.id", req.Header.Get("X-Tenant-ID")),
+		))
+	}
+
 	things := make([]ThingResp, 0)
 
 	things = append(things, ThingResp{
@@ -39,6 +48,8 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		span := trace.SpanFromContext(req.Context())
+		span.SetAttributes(attribute.String("error.type", "NotFoundError"))
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
@@ -61,6 +72,8 @@ func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		span := trace.SpanFromContext(req.Context())
+		span.SetAttributes(attribute.String("error.type", "NotFoundError"))
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
