@@ -22,6 +22,10 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
+// semconv is provided by the go.opentelemetry.io/otel package itself under
+// its versioned subpackage (not a separate module), so no extra go.mod
+// require entry is needed for it.
+
 // SetupOTelSDK builds and globally registers the OpenTelemetry SDK. It is
 // safe to call even if a provider is already globally registered (e.g. by
 // some future agent/host process) — in that case it logs and continues using
