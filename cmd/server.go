@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	otelchi "go.opentelemetry.io/contrib/instrumentation/github.com/go-chi/chi/otelchi"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,12 +35,35 @@ var (
 )
 
 func main() {
+	// Set up OpenTelemetry SDK (traces + metrics), registered globally
+	ctx := context.Background()
+	otelShutdown, err := setupOTelSDK(ctx, serviceName)
+	if err != nil {
+		log.Printf("### ⚠️ Failed to set up OpenTelemetry SDK: %v", err)
+	}
+	if otelShutdown != nil {
+		defer func() {
+			_ = otelShutdown(context.Background())
+		}()
+	}
+
+	if err := initAPIMetrics(); err != nil {
+		log.Printf("### ⚠️ Failed to initialize API metrics: %v", err)
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
+
+	// OpenTelemetry HTTP server instrumentation, emits http.server.request.duration
+	router.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(router)))
+
+	// Track in-flight requests for the http.server.active_requests gauge and
+	// record flow.outcomes for the end-to-end request flow SLI
+	router.Use(activeRequestTracker)
 
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
 	router.Use(middleware.RealIP)
@@ -55,6 +82,7 @@ func main() {
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
 		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(authMetricsMiddleware)
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)
