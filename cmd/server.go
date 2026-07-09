@@ -64,7 +64,7 @@ func main() {
 	})
 
 	// Custom SLI instrumentation: request outcomes, auth attempts, saturation gauges
-	telemetry.RegisterSaturationCallbacks(api.MaxWorkers, api.ActiveRequests)
+	telemetry.RegisterSaturationCallbacks(func() int { return defaultPort }, func() int64 { return 0 })
 	router.Use(telemetry.RequestOutcomeMiddleware)
 
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
