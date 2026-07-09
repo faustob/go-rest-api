@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -15,9 +17,12 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,12 +36,36 @@ var (
 )
 
 func main() {
+	// Bootstrap OpenTelemetry SDK (tracing + metrics), registers global providers
+	ctx := context.Background()
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx, serviceName)
+	if err != nil {
+		log.Printf("### ⚠️ Failed to set up OpenTelemetry: %v", err)
+	}
+	defer func() {
+		if otelShutdown != nil {
+			_ = otelShutdown(context.Background())
+		}
+	}()
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
+
+	// OTel HTTP server instrumentation, emits http.server.request.duration etc.
+	router.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "http.server",
+			otelhttp.WithMeterProvider(telemetry.MeterProvider()),
+			otelhttp.WithTracerProvider(telemetry.TracerProvider()),
+		)
+	})
+
+	// Custom SLI instrumentation: request outcomes, auth attempts, saturation gauges
+	telemetry.RegisterSaturationCallbacks(api.MaxWorkers, api.ActiveRequests)
+	router.Use(telemetry.RequestOutcomeMiddleware)
 
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
 	router.Use(middleware.RealIP)
@@ -55,6 +84,7 @@ func main() {
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
 		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(telemetry.AuthOutcomeMiddleware)
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)
