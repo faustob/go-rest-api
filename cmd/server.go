@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
@@ -31,6 +34,18 @@ var (
 )
 
 func main() {
+	// Bootstrap OpenTelemetry tracing & metrics SDKs, registered as global providers
+	ctx := context.Background()
+	otelShutdown, err := telemetry.SetupOTelSDK(ctx, serviceName)
+	if err != nil {
+		log.Printf("### ⚠️  Failed to setup OpenTelemetry SDK: %v", err)
+	}
+	defer func() {
+		if otelShutdown != nil {
+			_ = otelShutdown(context.Background())
+		}
+	}()
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +59,9 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry HTTP server instrumentation - request duration, outcome & saturation metrics
+	router.Use(telemetry.HTTPMetricsMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -55,6 +73,7 @@ func main() {
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
 		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(telemetry.AuthOutcomeMiddleware)
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)
