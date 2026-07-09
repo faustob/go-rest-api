@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 	otrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/go-chi/chi/v5"
@@ -37,11 +38,11 @@ var meter = otel.Meter(serviceScope)
 var tracer = otel.Tracer(serviceScope)
 
 var (
-	requestOutcomeCounter   metric.Int64Counter
-	authAttemptCounter      metric.Int64Counter
-	flowOutcomeCounter      metric.Int64Counter
-	flowEntryCounter        metric.Int64Counter
-	flowDurationHistogram   metric.Float64Histogram
+	requestOutcomeCounter    metric.Int64Counter
+	authAttemptCounter       metric.Int64Counter
+	flowOutcomeCounter       metric.Int64Counter
+	flowEntryCounter         metric.Int64Counter
+	flowDurationHistogram    metric.Float64Histogram
 	validationOutcomeCounter metric.Int64Counter
 
 	activeRequests atomic.Int64
