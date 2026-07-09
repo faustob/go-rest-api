@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	otelchi "go.opentelemetry.io/contrib/instrumentation/github.com/go-chi/chi/v5/otelchi"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,6 +35,21 @@ var (
 )
 
 func main() {
+	// Set up OpenTelemetry SDK (tracing + metrics), registered globally.
+	ctx := context.Background()
+	otelShutdown, err := setupOTelSDK(ctx)
+	if err != nil {
+		log.Printf("### ⚠️  Failed to set up OpenTelemetry SDK: %v", err)
+	}
+	defer func() {
+		if otelShutdown != nil {
+			_ = otelShutdown(ctx)
+		}
+	}()
+
+	// Create telemetry instruments now that the global MeterProvider is registered.
+	initTelemetry()
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +63,13 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry HTTP server instrumentation (after Recoverer so panics are still recovered,
+	// before auth middleware so all requests, including auth failures, are observed)
+	router.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(router)))
+
+	// Track in-flight requests for the http.server.active_requests observable gauge
+	router.Use(activeRequestsMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -55,6 +81,7 @@ func main() {
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
 		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(authOutcomeMiddleware)
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)

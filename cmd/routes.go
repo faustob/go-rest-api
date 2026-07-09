@@ -10,9 +10,12 @@ package main
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ThingResp struct {
@@ -35,10 +38,18 @@ func (api ThingAPI) getThings(resp http.ResponseWriter, req *http.Request) {
 
 // Get a thing by ID, dummy implementation
 func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
+	ctx := req.Context()
+	start := time.Now()
+	recordFlowEntry(ctx)
+
 	id := chi.URLParam(req, "id")
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		span := trace.SpanFromContext(ctx)
+		span.SetAttributes(attribute.String("error.type", "NotFoundError"))
+		recordValidationOutcome(ctx, "not_found")
+		recordFlowOutcome(ctx, "not_found", time.Since(start).Seconds())
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
@@ -47,6 +58,8 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 		Name: "Cheese On Toast",
 	}
 
+	recordValidationOutcome(ctx, "success")
+	recordFlowOutcome(ctx, "success", time.Since(start).Seconds())
 	api.ReturnJSON(resp, thing)
 }
 
@@ -57,13 +70,24 @@ func (api ThingAPI) createThing(resp http.ResponseWriter, req *http.Request) {
 
 // Delete a thing by ID, dummy implementation
 func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
+	ctx := req.Context()
+	start := time.Now()
+	recordFlowEntry(ctx)
+
 	id := chi.URLParam(req, "id")
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		span := trace.SpanFromContext(ctx)
+		span.SetAttributes(attribute.String("error.type", "NotFoundError"))
+		recordValidationOutcome(ctx, "not_found")
+		recordFlowOutcome(ctx, "not_found", time.Since(start).Seconds())
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
+
+	recordValidationOutcome(ctx, "success")
+	recordFlowOutcome(ctx, "success", time.Since(start).Seconds())
 
 	// Send a 204 No Content response
 	resp.WriteHeader(http.StatusNoContent)
