@@ -19,7 +19,6 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.36.0
 	go.opentelemetry.io/otel/sdk v1.36.0
 	go.opentelemetry.io/otel/sdk/metric v1.36.0
-	go.opentelemetry.io/otel/semconv/v1.26.0 v1.26.0
 	go.opentelemetry.io/contrib/instrumentation/github.com/go-chi/chi/v5/otelchi v0.61.0
 )
 
