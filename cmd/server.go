@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"net/http"
 	"os"
 	"regexp"
 	"time"
@@ -15,9 +17,12 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,6 +36,16 @@ var (
 )
 
 func main() {
+	// Set up OpenTelemetry SDK (tracing + metrics), registers globally
+	ctx := context.Background()
+	shutdownOtel, err := telemetry.SetupOTelSDK(ctx, serviceName)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		_ = shutdownOtel(ctx)
+	}()
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +59,17 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry HTTP server instrumentation (request duration, active requests, etc)
+	router.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "http.server",
+			otelhttp.WithMeterProvider(telemetry.MeterProvider()),
+			otelhttp.WithTracerProvider(telemetry.TracerProvider()),
+		)
+	})
+
+	// Custom telemetry middleware: outcome counters, route-level latency histogram, slow-request span events
+	router.Use(telemetry.HTTPTelemetryMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -54,7 +80,7 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
-		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(telemetry.AuthOutcomeMiddleware(jwtValidator.Middleware))
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)
