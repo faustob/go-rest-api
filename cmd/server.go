@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -16,11 +18,84 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
 
+	"net/http"
+
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
 
+	otelchi "go.opentelemetry.io/contrib/instrumentation/github.com/go-chi/chi/v5/otelchi"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	_ "github.com/joho/godotenv/autoload"
 )
+
+var (
+	requestOutcomeCounter metric.Int64Counter
+	authOutcomeCounter    metric.Int64Counter
+)
+
+// statusRecorder wraps http.ResponseWriter to capture the response status
+// code, forwarding optional interfaces the underlying writer may implement.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// requestOutcomeMiddleware records a total request-outcome counter, keyed by
+// low-cardinality method + outcome (success/error) attributes.
+func requestOutcomeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+
+		if requestOutcomeCounter != nil {
+			outcome := "success"
+			if rec.status >= 400 {
+				outcome = "error"
+			}
+			requestOutcomeCounter.Add(r.Context(), 1,
+				metric.WithAttributes(
+					attribute.String("http.request.method", r.Method),
+					attribute.String("outcome", outcome),
+				),
+			)
+		}
+	})
+}
+
+// authOutcomeMiddleware records an authentication outcome counter for routes
+// protected by JWT auth, using the response status set by upstream handlers.
+func authOutcomeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+
+		if authOutcomeCounter != nil {
+			outcome := "success"
+			if rec.status == http.StatusUnauthorized || rec.status == http.StatusForbidden {
+				outcome = "error"
+			}
+			authOutcomeCounter.Add(r.Context(), 1,
+				metric.WithAttributes(
+					attribute.String("outcome", outcome),
+				),
+			)
+		}
+	})
+}
 
 var (
 	healthy     = true               // Simple health flag
@@ -31,6 +106,38 @@ var (
 )
 
 func main() {
+	// Set up OpenTelemetry SDK (tracer provider, meter provider), registers globally.
+	ctx := context.Background()
+	otelShutdown, err := setupOTelSDK(ctx)
+	if err != nil {
+		log.Printf("### ⚠️  Failed to set up OpenTelemetry SDK: %v", err)
+	}
+	defer func() {
+		if otelShutdown != nil {
+			_ = otelShutdown(context.Background())
+		}
+	}()
+
+	meter := otel.Meter(serviceName)
+
+	requestOutcomeCounter, err = meter.Int64Counter(
+		"http.server.request.outcome.total",
+		metric.WithDescription("Total count of HTTP requests by outcome"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		log.Printf("### ⚠️  Failed to create request outcome counter: %v", err)
+	}
+
+	authOutcomeCounter, err = meter.Int64Counter(
+		"auth.request.outcome.total",
+		metric.WithDescription("Total count of authenticated requests by outcome"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		log.Printf("### ⚠️  Failed to create auth outcome counter: %v", err)
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,8 +151,14 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry instrumentation for HTTP server spans + metrics
+	router.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(router)))
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
+
+	// Request outcome + saturation instrumentation for SLIs
+	router.Use(requestOutcomeMiddleware)
 
 	// Group of protected routes, this can be all or some of the routes
 	router.Group(func(protectedRouter chi.Router) {
@@ -55,6 +168,7 @@ func main() {
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
 		protectedRouter.Use(jwtValidator.Middleware)
+		protectedRouter.Use(authOutcomeMiddleware)
 
 		// These routes do create, update, delete operations
 		api.addProtectedRoutes(protectedRouter)
