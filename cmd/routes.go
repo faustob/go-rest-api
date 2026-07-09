@@ -13,7 +13,14 @@ import (
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// attributeErrorType returns a low-cardinality error.type attribute for span annotation.
+func attributeErrorType(errType string) attribute.KeyValue {
+	return attribute.String("error.type", errType)
+}
 
 type ThingResp struct {
 	Name string `json:"name"`
@@ -39,6 +46,8 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		span := trace.SpanFromContext(req.Context())
+		span.SetAttributes(attributeErrorType("not_found"))
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
@@ -61,6 +70,8 @@ func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		span := trace.SpanFromContext(req.Context())
+		span.SetAttributes(attributeErrorType("not_found"))
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
