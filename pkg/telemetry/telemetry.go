@@ -14,10 +14,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"go.opentelemetry.io/otel"
 	"bufio"
 	"io"
 	"net"
+
+	"go.opentelemetry.io/otel"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -36,17 +37,17 @@ var meter = otel.Meter("go-rest-api")
 var tracer = otel.Tracer("go-rest-api")
 
 var (
-	requestDuration      metric.Float64Histogram
-	requestOutcomeTotal  metric.Int64Counter
-	authAttemptsTotal    metric.Int64Counter
-	tenantRequestTotal   metric.Int64Counter
-	flowOutcomesTotal    metric.Int64Counter
-	flowEntryTotal       metric.Int64Counter
-	flowValidationTotal  metric.Int64Counter
-	flowDuration         metric.Float64Histogram
-	flowFreshness        metric.Float64Histogram
-	poolSizeConfigured   int64 = 100 // default worker pool size, adjust to real config if known
-	activeRequestCount   int64
+	requestDuration     metric.Float64Histogram
+	requestOutcomeTotal metric.Int64Counter
+	authAttemptsTotal   metric.Int64Counter
+	tenantRequestTotal  metric.Int64Counter
+	flowOutcomesTotal   metric.Int64Counter
+	flowEntryTotal      metric.Int64Counter
+	flowValidationTotal metric.Int64Counter
+	flowDuration        metric.Float64Histogram
+	flowFreshness       metric.Float64Histogram
+	poolSizeConfigured  int64 = 100 // default worker pool size, adjust to real config if known
+	activeRequestCount  int64
 )
 
 // init eagerly creates all instruments from the package-level meter so that
@@ -472,4 +473,3 @@ func RecordFlowValidationOutcome(ctx context.Context, step string, outcome strin
 		attribute.String("outcome", outcome),
 	))
 }
-
