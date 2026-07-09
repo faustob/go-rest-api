@@ -125,7 +125,6 @@ func RequestTelemetryMiddleware(next http.Handler) http.Handler {
 				span.SetAttributes(attribute.String("error.type", "server_error"))
 			}
 		}
-		}
 	})
 }
 
