@@ -78,7 +78,7 @@ func init() {
 
 	flowDuration, err = meter.Float64Histogram(
 		"flow.duration",
-		 metric.WithDescription("End-to-end duration of the primary request flow, entry to terminal state"),
+		metric.WithDescription("End-to-end duration of the primary request flow, entry to terminal state"),
 		metric.WithUnit("s"),
 	)
 	if err != nil {
