@@ -8,6 +8,9 @@
 package main
 
 import (
+	"context"
+	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"time"
@@ -16,8 +19,12 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
 
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
+
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -31,6 +38,21 @@ var (
 )
 
 func main() {
+	// Initialise OpenTelemetry SDK (traces + metrics) and register it globally
+	otelShutdown, err := telemetry.InitOTel(context.Background(), serviceName, version)
+	if err != nil {
+		log.Printf("### ⚠️ OpenTelemetry init failed: %v", err)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if shutdownErr := otelShutdown(shutdownCtx); shutdownErr != nil {
+				log.Printf("### ⚠️ OpenTelemetry shutdown failed: %v", shutdownErr)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +66,14 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry: create a server span per request (otelhttp) then record semconv
+	// http.server.request.duration + request outcome/throughput metrics. Registered after
+	// Recoverer and before the JWT validator so denied requests are also observed.
+	router.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "http.server")
+	})
+	router.Use(telemetry.HTTPMetricsMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -54,6 +84,8 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
+		// OpenTelemetry: record auth attempt outcomes (granted/denied) around the JWT validator
+		protectedRouter.Use(telemetry.AuthOutcomeMiddleware)
 		protectedRouter.Use(jwtValidator.Middleware)
 
 		// These routes do create, update, delete operations

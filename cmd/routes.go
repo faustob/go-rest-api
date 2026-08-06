@@ -12,7 +12,11 @@ import (
 	"net/http"
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ThingResp struct {
@@ -31,6 +35,7 @@ func (api ThingAPI) getThings(resp http.ResponseWriter, req *http.Request) {
 	})
 
 	api.ReturnJSON(resp, things)
+	telemetry.RecordHandlerOutcome(req.Context(), "getThings", "success")
 }
 
 // Get a thing by ID, dummy implementation
@@ -39,9 +44,18 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		// Record the originating error class on the server span for 4xx/5xx attribution
+		trace.SpanFromContext(req.Context()).SetAttributes(
+			attribute.String("error.type", "thing_not_found"),
+		)
+		telemetry.RecordHandlerOutcome(req.Context(), "getThingByID", "not_found")
+
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
+
 		return
 	}
+
+	telemetry.RecordHandlerOutcome(req.Context(), "getThingByID", "success")
 
 	thing := ThingResp{
 		Name: "Cheese On Toast",
@@ -53,6 +67,7 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 // Create a new thing, dummy implementation
 func (api ThingAPI) createThing(resp http.ResponseWriter, req *http.Request) {
 	api.ReturnOKJSON(resp)
+	telemetry.RecordHandlerOutcome(req.Context(), "createThing", "success")
 }
 
 // Delete a thing by ID, dummy implementation
@@ -61,9 +76,17 @@ func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		trace.SpanFromContext(req.Context()).SetAttributes(
+			attribute.String("error.type", "thing_not_found"),
+		)
+		telemetry.RecordHandlerOutcome(req.Context(), "deleteThing", "not_found")
+
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
+
 		return
 	}
+
+	telemetry.RecordHandlerOutcome(req.Context(), "deleteThing", "success")
 
 	// Send a 204 No Content response
 	resp.WriteHeader(http.StatusNoContent)
