@@ -16,7 +16,7 @@ GOLINT_PATH := $(REPO_DIR)/.tools/golangci-lint
 AIR_PATH := $(REPO_DIR)/.tools/air
 
 .EXPORT_ALL_VARIABLES:
-.PHONY: help image push build run lint lint-fix clean
+.PHONY: help image push build run lint lint-fix clean tidy
 .DEFAULT_GOAL := help
 
 help: ## 💬 This help message :)
@@ -61,6 +61,10 @@ test: ## 🧪 Run tests
 	@figlet $@ || true
 	go test -v -count=1 ./cmd 
 	
+tidy: ## 📚 Resolve module deps & regenerate go.sum (run after adding OTel deps)
+	@figlet $@ || true
+	go mod tidy
+
 clean: ## 🧹 Clean up the repo
 	@figlet $@ || true
 	rm -rf .tools
