@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -16,10 +18,14 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
 
+	"net/http"
+
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
 
 	_ "github.com/joho/godotenv/autoload"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var (
@@ -31,6 +37,21 @@ var (
 )
 
 func main() {
+	// Initialise OpenTelemetry SDK (traces + metrics) and register it globally
+	otelShutdown, otelErr := initTelemetry(context.Background(), serviceName, version)
+	if otelErr != nil {
+		log.Printf("### ⚠️ OpenTelemetry init failed: %s", otelErr)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := otelShutdown(shutdownCtx); err != nil {
+				log.Printf("### ⚠️ OpenTelemetry shutdown error: %s", err)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +65,19 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry: server spans + http.server.request.duration (semconv) for every request.
+	// Registered after Recoverer and BEFORE auth so denied requests are also observed.
+	router.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "http.server",
+			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+				return r.Method
+			}),
+		)
+	})
+
+	// Custom request outcome / throughput / latency telemetry (route template + outcome class)
+	router.Use(RequestTelemetryMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -53,6 +87,9 @@ func main() {
 		clientID := os.Getenv("AUTH_CLIENT_ID")
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
+
+		// Count auth decisions (granted/denied) - must wrap the validator to observe rejections
+		protectedRouter.Use(AuthTelemetryMiddleware)
 
 		protectedRouter.Use(jwtValidator.Middleware)
 
