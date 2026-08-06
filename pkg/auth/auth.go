@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MicahParks/keyfunc/v2"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -60,9 +61,12 @@ func NewPassthroughValidator() PassthroughValidator {
 func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			telemetry.RecordAuthAttempt(r.Context(), false, authDenialReason(r, v.jwks))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+
+		telemetry.RecordAuthAttempt(r.Context(), true, "")
 
 		next.ServeHTTP(w, r)
 	})
@@ -72,9 +76,12 @@ func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 func (v JWTValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			telemetry.RecordAuthAttempt(r.Context(), false, authDenialReason(r, v.jwks))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+
+		telemetry.RecordAuthAttempt(r.Context(), true, "")
 
 		next.ServeHTTP(w, r)
 	}
@@ -92,6 +99,32 @@ func (v PassthroughValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
 	}
+}
+
+// authDenialReason classifies WHY a request was denied, for the auth outcome
+// counter. It returns a small, fixed set of low-cardinality reason codes and
+// never any token content or user identity.
+func authDenialReason(r *http.Request, jwks *keyfunc.JWKS) string {
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) == 0 {
+		return "missing_credentials"
+	}
+
+	authParts := strings.Split(authHeader, " ")
+	if len(authParts) != 2 {
+		return "malformed_credentials"
+	}
+
+	if strings.ToLower(authParts[0]) != "bearer" {
+		return "unsupported_scheme"
+	}
+
+	// JWKS unavailable is the key signal for the "investigate JWKS first" runbook
+	if jwks == nil {
+		return "jwks_unavailable"
+	}
+
+	return "invalid_token"
 }
 
 // validateRequest is an internal function to validate a request
