@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MicahParks/keyfunc/v2"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -60,9 +61,12 @@ func NewPassthroughValidator() PassthroughValidator {
 func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			telemetry.RecordAuthAttempt(r.Context(), "denied", "invalid_token", "jwt")
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+
+		telemetry.RecordAuthAttempt(r.Context(), "allowed", "", "jwt")
 
 		next.ServeHTTP(w, r)
 	})
@@ -72,9 +76,12 @@ func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 func (v JWTValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			telemetry.RecordAuthAttempt(r.Context(), "denied", "invalid_token", "jwt")
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+
+		telemetry.RecordAuthAttempt(r.Context(), "allowed", "", "jwt")
 
 		next.ServeHTTP(w, r)
 	}

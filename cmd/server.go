@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
@@ -31,6 +34,21 @@ var (
 )
 
 func main() {
+	// Register the OpenTelemetry SDK globally, endpoint driven by OTEL_EXPORTER_OTLP_ENDPOINT
+	otelShutdown, otelErr := telemetry.InitOTel(context.Background(), serviceName, version)
+	if otelErr != nil {
+		log.Printf("### OTel: failed to initialise telemetry: %s", otelErr)
+	}
+
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := otelShutdown(shutdownCtx); err != nil {
+			log.Printf("### OTel: shutdown error: %s", err)
+		}
+	}()
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -43,6 +61,10 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry HTTP server spans & metrics: after Recoverer, and before the auth
+	// group so requests denied by JWT validation are still observed
+	router.Use(telemetry.HTTPMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
