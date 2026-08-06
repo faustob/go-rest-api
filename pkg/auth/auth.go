@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MicahParks/keyfunc/v2"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -59,7 +60,11 @@ func NewPassthroughValidator() PassthroughValidator {
 // Middleware returns middleware to enforce JWT auth on all routes
 func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+		ok, reason := validateRequestWithReason(r, v.clientID, v.scope, v.jwks)
+
+		telemetry.RecordAuthAttempt(r.Context(), ok, reason)
+
+		if !ok {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -71,7 +76,11 @@ func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 // Protect can be added around any route handler to enforce JWT auth
 func (v JWTValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+		ok, reason := validateRequestWithReason(r, v.clientID, v.scope, v.jwks)
+
+		telemetry.RecordAuthAttempt(r.Context(), ok, reason)
+
+		if !ok {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -92,6 +101,34 @@ func (v PassthroughValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
 	}
+}
+
+// validateRequestWithReason validates a request and also returns a low-cardinality
+// reason class describing why access was denied (empty when allowed). It is used to
+// dimension the auth.attempts telemetry counter. It delegates to validateRequest so
+// the original validation logic remains the single source of truth.
+func validateRequestWithReason(r *http.Request, clientID string, scope string, jwks *keyfunc.JWKS) (bool, string) {
+	if validateRequest(r, clientID, scope, jwks) {
+		return true, ""
+	}
+
+	// Re-derive a coarse denial CLASS for the metric dimension only. Never includes
+	// token contents, claims, user ids or error messages.
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) == 0 {
+		return false, "missing_token"
+	}
+
+	authParts := strings.Split(authHeader, " ")
+	if len(authParts) != 2 || strings.ToLower(authParts[0]) != "bearer" {
+		return false, "malformed_header"
+	}
+
+	if jwks == nil {
+		return false, "jwks_unavailable"
+	}
+
+	return false, "invalid_token"
 }
 
 // validateRequest is an internal function to validate a request

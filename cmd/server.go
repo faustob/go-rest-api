@@ -15,6 +15,11 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
+
+	"context"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
@@ -31,6 +36,15 @@ var (
 )
 
 func main() {
+	// Start OpenTelemetry: builds & registers the global tracer/meter providers.
+	// Endpoint is env-driven via OTEL_EXPORTER_OTLP_ENDPOINT, service name via OTEL_SERVICE_NAME.
+	otelCtx := context.Background()
+	otelShutdown := telemetry.InitOTel(otelCtx, serviceName, version)
+
+	defer func() {
+		otelShutdown(context.Background())
+	}()
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -43,6 +57,15 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry HTTP server instrumentation, emits http.server.request.duration
+	// (histogram, seconds) with semconv method/status attributes, plus server spans.
+	// Registered after Recoverer (panics stay recovered) and BEFORE the JWT validator
+	// so that auth rejections are still observed as requests.
+	router.Use(otelhttp.NewMiddleware(serviceName))
+	// Adds the chi route TEMPLATE (low cardinality) to the metrics above, and records
+	// outcome/throughput counters plus slow-request span events.
+	router.Use(telemetry.ChiRouteTelemetry)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
