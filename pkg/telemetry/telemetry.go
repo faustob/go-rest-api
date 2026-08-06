@@ -14,8 +14,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/middleware"
+	"github.com/go-chi/chi/v5"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
