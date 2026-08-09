@@ -13,6 +13,9 @@ import (
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ThingResp struct {
@@ -36,6 +39,12 @@ func (api ThingAPI) getThings(resp http.ResponseWriter, req *http.Request) {
 // Get a thing by ID, dummy implementation
 func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 	id := chi.URLParam(req, "id")
+
+	// Record the failure CLASS (never the message) on the server span so non-2xx responses
+	// can be attributed to a root cause class
+	if id != "1" {
+		trace.SpanFromContext(req.Context()).SetAttributes(attribute.String("error.type", "thing_not_found"))
+	}
 
 	// Example of using problem package to send a 404
 	if id != "1" {

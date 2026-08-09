@@ -12,6 +12,9 @@ import (
 	"regexp"
 	"time"
 
+	"context"
+	"log"
+
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
@@ -31,6 +34,18 @@ var (
 )
 
 func main() {
+	// OpenTelemetry: build & register the global SDK before any instrumented code runs
+	otelShutdown, otelErr := initTelemetry(context.Background())
+	if otelErr != nil {
+		log.Printf("### ⚠️ OpenTelemetry init failed, continuing without OTel export: %s", otelErr)
+	} else {
+		defer func() {
+			if err := otelShutdown(context.Background()); err != nil {
+				log.Printf("### ⚠️ OpenTelemetry shutdown error: %s", err)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +59,10 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry HTTP server telemetry: after Recoverer (panics still recovered) and before
+	// the auth middleware so denied requests are also observed
+	router.Use(telemetryMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -53,6 +72,9 @@ func main() {
 		clientID := os.Getenv("AUTH_CLIENT_ID")
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
+
+		// Auth attempt outcome counter, registered BEFORE the validator so its denials are observed
+		protectedRouter.Use(authTelemetryMiddleware)
 
 		protectedRouter.Use(jwtValidator.Middleware)
 
