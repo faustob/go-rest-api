@@ -13,10 +13,23 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/go-chi/chi/v5"
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace"
 )
+
+// slowRequestThreshold is the P99 latency budget, requests over it get a span event
+const slowRequestThreshold = 750 * time.Millisecond
 
 // Get a value from JWT claim and add it to the request context
 // Note: Ignores any errors, such as missing token or claim
@@ -73,6 +86,64 @@ func (b *Base) SimpleCORSMiddleware(next http.Handler) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cors.Handler(next).ServeHTTP(w, r)
+	})
+}
+
+// OTelTelemetryMiddleware enriches the OpenTelemetry server span and the semconv
+// http.server.request.duration histogram (both emitted by otelhttp) with the matched
+// chi route TEMPLATE, the error class for 5xx responses and a slow request span event.
+// It must be registered inside otelhttp.NewMiddleware, see cmd/server.go
+func (b *Base) OTelTelemetryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// chi's wrapper forwards Flusher/Hijacker/Pusher/ReaderFrom, so SSE & streaming still work
+		ww := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
+
+		next.ServeHTTP(ww, r)
+
+		elapsed := time.Since(start)
+
+		// Route pattern is only populated once chi has routed the request, so read it here
+		route := ""
+		if rctx := chi.RouteContext(r.Context()); rctx != nil {
+			route = rctx.RoutePattern()
+		}
+
+		status := ww.Status()
+		if status == 0 {
+			status = http.StatusOK
+		}
+
+		attrs := make([]attribute.KeyValue, 0, 2)
+		if route != "" {
+			attrs = append(attrs, semconv.HTTPRoute(route))
+		}
+
+		if status >= http.StatusInternalServerError {
+			attrs = append(attrs, semconv.ErrorTypeKey.String(strconv.Itoa(status)))
+		}
+
+		// otelhttp reads the labeler after the handler returns, these attributes land
+		// on the http.server.request.duration metric
+		labeler, _ := otelhttp.LabelerFromContext(r.Context())
+		labeler.Add(attrs...)
+
+		span := trace.SpanFromContext(r.Context())
+		if span.IsRecording() {
+			span.SetAttributes(attrs...)
+
+			if status >= http.StatusInternalServerError {
+				span.SetStatus(codes.Error, "")
+			}
+
+			if elapsed > slowRequestThreshold {
+				span.AddEvent("slow.request", trace.WithAttributes(
+					attribute.Float64("http.server.request.duration", elapsed.Seconds()),
+					attribute.Int("http.response.status_code", status),
+				))
+			}
+		}
 	})
 }
 

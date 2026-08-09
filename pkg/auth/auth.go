@@ -15,6 +15,8 @@ import (
 
 	"github.com/MicahParks/keyfunc/v2"
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 )
 
 // JWTValidator is a struct that can be used to protect routes
@@ -60,21 +62,46 @@ func NewPassthroughValidator() PassthroughValidator {
 func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			telemetry.RecordAuthAttempt(r.Context(), "denied", denialReason(r, v.jwks))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 
+		telemetry.RecordAuthAttempt(r.Context(), "allowed", "")
+
 		next.ServeHTTP(w, r)
 	})
+}
+
+// denialReason maps a failed validation to a LOW cardinality denial reason class
+func denialReason(r *http.Request, jwks *keyfunc.JWKS) string {
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) == 0 {
+		return "missing_token"
+	}
+
+	authParts := strings.Split(authHeader, " ")
+	if len(authParts) != 2 || strings.ToLower(authParts[0]) != "bearer" {
+		return "malformed_header"
+	}
+
+	if jwks == nil {
+		return "jwks_unavailable"
+	}
+
+	return "invalid_token"
 }
 
 // Protect can be added around any route handler to enforce JWT auth
 func (v JWTValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			telemetry.RecordAuthAttempt(r.Context(), "denied", denialReason(r, v.jwks))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+
+		telemetry.RecordAuthAttempt(r.Context(), "allowed", "")
 
 		next.ServeHTTP(w, r)
 	}

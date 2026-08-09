@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -15,9 +17,12 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -34,6 +39,22 @@ func main() {
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
+	// Initialise the OpenTelemetry SDK & register it as the global provider
+	// Endpoint is env driven via OTEL_EXPORTER_OTLP_ENDPOINT
+	otelShutdown, err := telemetry.InitOTel(context.Background(), serviceName, version)
+	if err != nil {
+		log.Printf("### 📡 OTel: failed to initialise OpenTelemetry: %s", err)
+	}
+
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := otelShutdown(shutdownCtx); err != nil {
+			log.Printf("### 📡 OTel: error shutting down OpenTelemetry: %s", err)
+		}
+	}()
+
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
@@ -43,6 +64,12 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry: server spans + the semconv http.server.request.duration histogram,
+	// then enrichment with the chi route template, error class & slow request span events.
+	// Registered after Recoverer and before the JWT validator so denied requests are observed
+	router.Use(otelhttp.NewMiddleware(serviceName))
+	router.Use(api.OTelTelemetryMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
