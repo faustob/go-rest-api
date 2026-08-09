@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -31,6 +33,21 @@ var (
 )
 
 func main() {
+	// Initialise OpenTelemetry SDK and register it globally, flush on shutdown
+	otelShutdown, otelErr := initOpenTelemetry(context.Background(), serviceName, version)
+	if otelErr != nil {
+		log.Printf("### ⚠️ OpenTelemetry init failed: %v", otelErr)
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := otelShutdown(ctx); err != nil {
+				log.Printf("### ⚠️ OpenTelemetry shutdown error: %v", err)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +61,10 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry HTTP server telemetry (spans + http.server.request.duration),
+	// placed after Recoverer and before auth so denied requests are observed too
+	router.Use(telemetryMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -54,6 +75,7 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
+		protectedRouter.Use(authTelemetryMiddleware)
 		protectedRouter.Use(jwtValidator.Middleware)
 
 		// These routes do create, update, delete operations
