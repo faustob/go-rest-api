@@ -8,6 +8,7 @@
 package auth
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strings"
@@ -15,6 +16,9 @@ import (
 
 	"github.com/MicahParks/keyfunc/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // JWTValidator is a struct that can be used to protect routes
@@ -25,6 +29,35 @@ type JWTValidator struct {
 }
 
 type PassthroughValidator struct {
+}
+
+// OpenTelemetry auth instrumentation. The meter comes from the globally
+// registered provider (the application binary registers the SDK).
+var (
+	authMeter = otel.Meter("github.com/benc-uk/go-rest-api/pkg/auth")
+
+	// authAttempts counts every authentication decision, tagged with the outcome
+	// and, when denied, a low-cardinality reason class.
+	authAttempts, _ = authMeter.Int64Counter(
+		"auth.attempts",
+		metric.WithDescription("Authentication/authorization decisions, by outcome and denial reason"),
+		metric.WithUnit("{attempt}"),
+	)
+)
+
+// recordAuthOutcome records a single authentication decision.
+// reason is a fixed, low-cardinality class string (never a token or message).
+func recordAuthOutcome(ctx context.Context, outcome string, reason string) {
+	if authAttempts == nil {
+		return
+	}
+
+	attrs := []attribute.KeyValue{attribute.String("outcome", outcome)}
+	if reason != "" {
+		attrs = append(attrs, attribute.String("error.type", reason))
+	}
+
+	authAttempts.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
 type Validator interface {
@@ -97,24 +130,31 @@ func (v PassthroughValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 // validateRequest is an internal function to validate a request
 func validateRequest(r *http.Request, clientID string, scope string, jwks *keyfunc.JWKS) bool {
 	// Get auth header & bearer scheme
+	ctx := r.Context()
+
 	authHeader := r.Header.Get("Authorization")
 	if len(authHeader) == 0 {
+		recordAuthOutcome(ctx, "denied", "missing_header")
 		return false
 	}
 
 	// Split header into scheme & B64 token	string
 	authParts := strings.Split(authHeader, " ")
 	if len(authParts) != 2 {
+		recordAuthOutcome(ctx, "denied", "malformed_header")
 		return false
 	}
 
 	if strings.ToLower(authParts[0]) != "bearer" {
+		recordAuthOutcome(ctx, "denied", "unsupported_scheme")
 		return false
 	}
 
 	// JWKS might not have been fetched or some other error with it, if not then deny access
 	if jwks == nil {
 		log.Printf("### 🔐 Auth: No JWKS, cannot validate token, denying access")
+		recordAuthOutcome(ctx, "denied", "jwks_unavailable")
+
 		return false
 	}
 
@@ -122,6 +162,8 @@ func validateRequest(r *http.Request, clientID string, scope string, jwks *keyfu
 	token, err := jwt.Parse(authParts[1], jwks.Keyfunc)
 	if err != nil {
 		log.Printf("### 🔐 Auth: Failed to parse the JWT. Error: %s", err)
+		recordAuthOutcome(ctx, "denied", "invalid_token")
+
 		return false
 	}
 
@@ -130,6 +172,8 @@ func validateRequest(r *http.Request, clientID string, scope string, jwks *keyfu
 	// Check the scope includes the app scope
 	if !strings.Contains(claims["scp"].(string), scope) {
 		log.Printf("### 🔐 Auth: Scope '%s' is missing from token scope '%s'", scope, claims["scp"])
+		recordAuthOutcome(ctx, "denied", "missing_scope")
+
 		return false
 	}
 
@@ -142,8 +186,13 @@ func validateRequest(r *http.Request, clientID string, scope string, jwks *keyfu
 	// Check the token audience is the client id, this might have already been done by jwt.Parse
 	if audience != clientID {
 		log.Printf("### 🔐 Auth: Token audience '%s' does not match '%s'", claims["aud"], clientID)
+		recordAuthOutcome(ctx, "denied", "audience_mismatch")
+
 		return false
 	}
+
+	// Success path: recorded only once validation has fully passed.
+	recordAuthOutcome(ctx, "allowed", "")
 
 	return true
 }
