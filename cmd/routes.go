@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -39,9 +40,13 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		telemetry.RecordHandlerOutcome(req.Context(), "/things/{id}", "not_found")
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
+
 		return
 	}
+
+	telemetry.RecordHandlerOutcome(req.Context(), "/things/{id}", "ok")
 
 	thing := ThingResp{
 		Name: "Cheese On Toast",
@@ -61,9 +66,13 @@ func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		telemetry.RecordHandlerOutcome(req.Context(), "/things/{id}", "not_found")
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
+
 		return
 	}
+
+	telemetry.RecordHandlerOutcome(req.Context(), "/things/{id}", "ok")
 
 	// Send a 204 No Content response
 	resp.WriteHeader(http.StatusNoContent)

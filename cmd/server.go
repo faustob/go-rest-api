@@ -8,6 +8,9 @@
 package main
 
 import (
+	"context"
+	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"time"
@@ -16,11 +19,21 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
 
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
+
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	_ "github.com/joho/godotenv/autoload"
 )
+
+// telemetryHandlerWrapper installs the otelhttp handler at the server boundary so that
+// http.server.request.duration (semconv, seconds) is emitted for every inbound request.
+func telemetryHandlerWrapper(h http.Handler) http.Handler {
+	return otelhttp.NewHandler(h, "http.server")
+}
 
 var (
 	healthy     = true               // Simple health flag
@@ -31,6 +44,21 @@ var (
 )
 
 func main() {
+	// Initialise the OpenTelemetry SDK and register it globally (env driven, OTEL_EXPORTER_OTLP_ENDPOINT)
+	otelShutdown, otelErr := telemetry.Init(context.Background(), serviceName, version)
+	if otelErr != nil {
+		log.Printf("### ⚠️ OpenTelemetry init failed: %s", otelErr)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := otelShutdown(shutdownCtx); err != nil {
+				log.Printf("### ⚠️ OpenTelemetry shutdown failed: %s", err)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +72,10 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry request outcome / latency / throughput middleware.
+	// Registered after Recoverer and BEFORE the JWT validator so denied requests are observed too.
+	router.Use(telemetry.RequestMetricsMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -54,6 +86,8 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
+		// Count every authentication decision (allowed / denied + reason)
+		protectedRouter.Use(telemetry.AuthOutcomeMiddleware)
 		protectedRouter.Use(jwtValidator.Middleware)
 
 		// These routes do create, update, delete operations
@@ -85,5 +119,5 @@ func main() {
 	//})
 
 	// Start the API server, this function will block until the server is stopped
-	api.StartServer(serverPort, router, 10*time.Second)
+	api.StartServer(serverPort, telemetryHandlerWrapper(router), 10*time.Second)
 }
