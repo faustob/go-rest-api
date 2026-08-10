@@ -11,6 +11,9 @@ import (
 	"errors"
 	"net/http"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/benc-uk/go-rest-api/pkg/problem"
 	"github.com/go-chi/chi/v5"
 )
@@ -39,6 +42,7 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		trace.SpanFromContext(req.Context()).SetAttributes(attribute.String("error.type", "not_found"))
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
@@ -61,6 +65,7 @@ func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		trace.SpanFromContext(req.Context()).SetAttributes(attribute.String("error.type", "not_found"))
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}

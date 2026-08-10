@@ -8,6 +8,9 @@
 package main
 
 import (
+	"context"
+	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"time"
@@ -20,6 +23,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	_ "github.com/joho/godotenv/autoload"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var (
@@ -31,6 +36,21 @@ var (
 )
 
 func main() {
+	// Initialise OpenTelemetry SDK and register it globally, flush on exit
+	otelShutdown, err := initOpenTelemetry(context.Background(), serviceName, version)
+	if err != nil {
+		log.Printf("### ⚠️ OpenTelemetry init failed: %s", err)
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := otelShutdown(ctx); err != nil {
+				log.Printf("### ⚠️ OpenTelemetry shutdown error: %s", err)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -43,6 +63,15 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry: create a server span + http.server.request.duration histogram per request
+	router.Use(func(next http.Handler) http.Handler {
+		return otelhttp.NewHandler(next, "http.server")
+	})
+
+	// OpenTelemetry: route-level outcome/throughput metrics and slow-request span events
+	// Registered after Recoverer and BEFORE the JWT validator so auth denials are observed
+	router.Use(httpTelemetryMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
