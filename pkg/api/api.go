@@ -16,6 +16,7 @@ import (
 
 	"github.com/benc-uk/go-rest-api/pkg/problem"
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Base holds a standard set of values for all services & APIs
@@ -68,7 +69,9 @@ func (b *Base) ReturnOKJSON(w http.ResponseWriter) {
 // StartServer starts the HTTP server and blocks until it exits
 func (b *Base) StartServer(port int, router chi.Router, timeout time.Duration) {
 	srv := &http.Server{
-		Handler:      router,
+		// otelhttp emits server spans and propagates trace context. Wrapping happens here, at the
+		// http.Server boundary, so the caller's chi.Router type is untouched.
+		Handler:      otelhttp.NewHandler(router, "http.server"),
 		Addr:         fmt.Sprintf(":%d", port),
 		WriteTimeout: timeout,
 		ReadTimeout:  timeout,
