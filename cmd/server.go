@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -15,6 +17,8 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
@@ -31,6 +35,23 @@ var (
 )
 
 func main() {
+	// Initialise the OpenTelemetry SDK and register it globally (endpoint via OTEL_EXPORTER_OTLP_ENDPOINT)
+	otelCtx := context.Background()
+
+	otelShutdown, err := initOTel(otelCtx, serviceName, version)
+	if err != nil {
+		log.Printf("### ⚠️ OpenTelemetry init failed: %s", err)
+	} else {
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := otelShutdown(shutdownCtx); err != nil {
+				log.Printf("### ⚠️ OpenTelemetry shutdown error: %s", err)
+			}
+		}()
+	}
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +65,10 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// Request outcome / throughput counter + latency histogram + slow request span events
+	// (after Recoverer, before auth so denials are observed)
+	router.Use(httpTelemetryMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -54,6 +79,8 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
+		// Record an auth attempt outcome for every decision made by the JWT validator
+		protectedRouter.Use(authTelemetryMiddleware)
 		protectedRouter.Use(jwtValidator.Middleware)
 
 		// These routes do create, update, delete operations
@@ -85,5 +112,6 @@ func main() {
 	//})
 
 	// Start the API server, this function will block until the server is stopped
-	api.StartServer(serverPort, router, 10*time.Second)
+	// Wrap at the http.Handler boundary (router variable keeps its chi.Router type)
+	api.StartServer(serverPort, otelhttp.NewHandler(router, "http.server"), 10*time.Second)
 }
