@@ -14,6 +14,15 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/m8as/go-chi-metrics v0.0.4
 	github.com/prometheus/client_golang v1.22.0
+	go.opentelemetry.io/contrib/instrumentation/github.com/go-chi/chi/otelchi v0.53.0
+	go.opentelemetry.io/otel v1.36.0
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.36.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.36.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.36.0
+	go.opentelemetry.io/otel/metric v1.36.0
+	go.opentelemetry.io/otel/sdk v1.36.0
+	go.opentelemetry.io/otel/sdk/metric v1.36.0
+	go.opentelemetry.io/otel/trace v1.36.0
 )
 
 require (
@@ -24,6 +33,9 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.36.0 // indirect
+	go.opentelemetry.io/otel/sdk/resource v1.36.0 // indirect
+	go.opentelemetry.io/otel/semconv/v1.26.0 v1.36.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 	howett.net/plist v0.0.0-20181124034731-591f970eefbb // indirect
