@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	"go.opentelemetry.io/contrib/instrumentation/github.com/go-chi/chi/otelchi"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -34,6 +38,19 @@ func main() {
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
+	// Bootstrap OpenTelemetry (traces + metrics). OTLP endpoint is env-driven
+	// via OTEL_EXPORTER_OTLP_ENDPOINT. Telemetry failures never block startup.
+	otelShutdown, err := initTelemetry(context.Background())
+	if err != nil {
+		log.Printf("### ⚠️ OpenTelemetry disabled: %v", err)
+	} else {
+		defer func() {
+			if err := otelShutdown(context.Background()); err != nil {
+				log.Printf("### ⚠️ OpenTelemetry shutdown error: %v", err)
+			}
+		}()
+	}
+
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
@@ -43,6 +60,11 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry tracing middleware (after Recoverer so panics are still recovered)
+	router.Use(otelchi.Middleware(serviceName))
+	// HTTP SLI metrics: request duration, outcome counter, active-request gauge, flow metrics
+	router.Use(httpTelemetryMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
@@ -54,6 +76,8 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
+		// Auth outcome counter must be registered BEFORE the JWT validator so it observes denials
+		protectedRouter.Use(authOutcomeMiddleware)
 		protectedRouter.Use(jwtValidator.Middleware)
 
 		// These routes do create, update, delete operations
