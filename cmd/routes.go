@@ -39,9 +39,11 @@ func (api ThingAPI) getThingByID(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		recordValidationOutcome(req, "thing.id", "failed")
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
+	recordValidationOutcome(req, "thing.id", "passed")
 
 	thing := ThingResp{
 		Name: "Cheese On Toast",
@@ -61,9 +63,11 @@ func (api ThingAPI) deleteThing(resp http.ResponseWriter, req *http.Request) {
 
 	// Example of using problem package to send a 404
 	if id != "1" {
+		recordValidationOutcome(req, "thing.id", "failed")
 		problem.Wrap(404, req.RequestURI, "thing", errors.New("thing not found")).Send(resp)
 		return
 	}
+	recordValidationOutcome(req, "thing.id", "passed")
 
 	// Send a 204 No Content response
 	resp.WriteHeader(http.StatusNoContent)
