@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
@@ -34,8 +37,28 @@ func main() {
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
+	// Initialize OpenTelemetry (traces + metrics) and register it as the global SDK.
+	// The OTLP endpoint is env-driven via OTEL_EXPORTER_OTLP_ENDPOINT.
+	// This MUST succeed before the router (and its telemetry middleware) is built,
+	// otherwise the middleware would record against nil instruments.
+	otelCtx := context.Background()
+
+	shutdownTelemetry, err := telemetry.Init(otelCtx, serviceName, version)
+	if err != nil {
+		log.Fatalf("### ⚠️ Telemetry: failed to initialize OpenTelemetry: %s", err)
+	}
+
+	defer func() {
+		if shutdownErr := shutdownTelemetry(otelCtx); shutdownErr != nil {
+			log.Printf("### ⚠️ Telemetry: failed to shutdown OpenTelemetry: %s", shutdownErr)
+		}
+	}()
+
 	// Core of the REST API
 	router := chi.NewRouter()
+	// api is a ThingAPI, which embeds *api.Base by value in cmd/api.go, so every
+	// *Base method (SimpleCORSMiddleware, RequestTelemetryMiddleware, ...) is
+	// promoted and reachable as api.<Method> below.
 	api := NewThingAPI()
 
 	// Some basic middleware, change as you see fit, see: https://github.com/go-chi/chi#core-middlewares
@@ -43,6 +66,10 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry request metrics & tracing - must run before auth/validation
+	// middleware so denied requests are still observed
+	router.Use(api.RequestTelemetryMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)

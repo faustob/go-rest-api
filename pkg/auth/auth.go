@@ -15,6 +15,10 @@ import (
 
 	"github.com/MicahParks/keyfunc/v2"
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // JWTValidator is a struct that can be used to protect routes
@@ -60,9 +64,14 @@ func NewPassthroughValidator() PassthroughValidator {
 func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			telemetry.AuthAttempts.Add(r.Context(), 1, metric.WithAttributes(attribute.String("outcome", "denied"), attribute.String("reason", "invalid_or_missing_token")))
+			telemetry.ValidationOutcomes.Add(r.Context(), 1, metric.WithAttributes(attribute.String("step", "jwt_auth"), attribute.String("outcome", "failed")))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+
+		telemetry.AuthAttempts.Add(r.Context(), 1, metric.WithAttributes(attribute.String("outcome", "allowed")))
+		telemetry.ValidationOutcomes.Add(r.Context(), 1, metric.WithAttributes(attribute.String("step", "jwt_auth"), attribute.String("outcome", "passed")))
 
 		next.ServeHTTP(w, r)
 	})
@@ -72,9 +81,14 @@ func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 func (v JWTValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			telemetry.AuthAttempts.Add(r.Context(), 1, metric.WithAttributes(attribute.String("outcome", "denied"), attribute.String("reason", "invalid_or_missing_token")))
+			telemetry.ValidationOutcomes.Add(r.Context(), 1, metric.WithAttributes(attribute.String("step", "jwt_auth"), attribute.String("outcome", "failed")))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+
+		telemetry.AuthAttempts.Add(r.Context(), 1, metric.WithAttributes(attribute.String("outcome", "allowed")))
+		telemetry.ValidationOutcomes.Add(r.Context(), 1, metric.WithAttributes(attribute.String("step", "jwt_auth"), attribute.String("outcome", "passed")))
 
 		next.ServeHTTP(w, r)
 	}
