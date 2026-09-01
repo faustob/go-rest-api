@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -15,9 +17,11 @@ import (
 	"github.com/benc-uk/go-rest-api/pkg/auth"
 	"github.com/benc-uk/go-rest-api/pkg/env"
 	"github.com/benc-uk/go-rest-api/pkg/logging"
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+	"github.com/riandyrn/otelchi"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -34,6 +38,20 @@ func main() {
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
+	// Initialize the OpenTelemetry SDK (traces + metrics). The OTLP/gRPC
+	// endpoint is env-driven via OTEL_EXPORTER_OTLP_ENDPOINT.
+	otelCtx := context.Background()
+	shutdownOTel, err := telemetry.InitOTel(otelCtx, serviceName)
+	if err != nil {
+		log.Printf("### ⚠️  Failed to initialize OpenTelemetry: %v", err)
+	} else {
+		defer func() {
+			if shutdownErr := shutdownOTel(otelCtx); shutdownErr != nil {
+				log.Printf("### ⚠️  Failed to shutdown OpenTelemetry cleanly: %v", shutdownErr)
+			}
+		}()
+	}
+
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
@@ -43,6 +61,12 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry: tracing spans (otelchi) and custom HTTP metrics middleware.
+	// Placed after Recoverer (so a downstream panic is still recovered) and
+	// before any auth/validation middleware whose rejections must be counted.
+	router.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(router)))
+	router.Use(httpMetricsMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
@@ -54,6 +78,7 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
+		protectedRouter.Use(authMetricsMiddleware)
 		protectedRouter.Use(jwtValidator.Middleware)
 
 		// These routes do create, update, delete operations
