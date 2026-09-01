@@ -15,6 +15,11 @@ import (
 
 	"github.com/MicahParks/keyfunc/v2"
 	"github.com/golang-jwt/jwt/v5"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/benc-uk/go-rest-api/pkg/telemetry"
 )
 
 // JWTValidator is a struct that can be used to protect routes
@@ -60,9 +65,12 @@ func NewPassthroughValidator() PassthroughValidator {
 func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			recordAuthAttempt(r, "denied", denialReason(r, v.jwks))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+
+		recordAuthAttempt(r, "allowed", "")
 
 		next.ServeHTTP(w, r)
 	})
@@ -72,9 +80,12 @@ func (v JWTValidator) Middleware(next http.Handler) http.Handler {
 func (v JWTValidator) Protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !validateRequest(r, v.clientID, v.scope, v.jwks) {
+			recordAuthAttempt(r, "denied", denialReason(r, v.jwks))
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+
+		recordAuthAttempt(r, "allowed", "")
 
 		next.ServeHTTP(w, r)
 	}
@@ -146,4 +157,34 @@ func validateRequest(r *http.Request, clientID string, scope string, jwks *keyfu
 	}
 
 	return true
+}
+
+// recordAuthAttempt emits the auth.attempts counter backing the Authentication
+// Failure Rate SLI, tagged with the outcome and (for denials) the reason.
+func recordAuthAttempt(r *http.Request, outcome string, reason string) {
+	attrs := []attribute.KeyValue{attribute.String("outcome", outcome)}
+	if reason != "" {
+		attrs = append(attrs, attribute.String("reason", reason))
+	}
+
+	telemetry.AuthAttempts.Add(r.Context(), 1, metric.WithAttributes(attrs...))
+}
+
+// denialReason gives a coarse, low-cardinality reason why a request was denied
+func denialReason(r *http.Request, jwks *keyfunc.JWKS) string {
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) == 0 {
+		return "missing_credentials"
+	}
+
+	authParts := strings.Split(authHeader, " ")
+	if len(authParts) != 2 || strings.ToLower(authParts[0]) != "bearer" {
+		return "malformed_credentials"
+	}
+
+	if jwks == nil {
+		return "jwks_unavailable"
+	}
+
+	return "invalid_token"
 }
