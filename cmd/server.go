@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"regexp"
 	"time"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
+
+	"github.com/riandyrn/otelchi"
 
 	_ "github.com/joho/godotenv/autoload"
 )
@@ -34,6 +37,17 @@ func main() {
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
+	// Initialise OpenTelemetry (traces + metrics), exported via OTLP/gRPC.
+	// Endpoint is driven by the standard OTEL_EXPORTER_OTLP_ENDPOINT env var.
+	otelCtx := context.Background()
+	shutdownTelemetry, err := initTelemetry(otelCtx)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		_ = shutdownTelemetry(otelCtx)
+	}()
+
 	// Core of the REST API
 	router := chi.NewRouter()
 	api := NewThingAPI()
@@ -43,6 +57,12 @@ func main() {
 	// Filtered request logger, exclude /metrics & /health endpoints
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
+
+	// OpenTelemetry chi tracing middleware (third-party, not contrib) followed by
+	// our request-duration/outcome/tenant metrics middleware, which reads the
+	// span created above to annotate errors and slow requests.
+	router.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(router)))
+	router.Use(httpTelemetryMiddleware)
 
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
@@ -54,6 +74,9 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
+		// Record auth attempt outcomes; must run BEFORE the JWT validator so it
+		// observes the validator's own rejections (401/403), not just handler errors.
+		protectedRouter.Use(authOutcomeMiddleware)
 		protectedRouter.Use(jwtValidator.Middleware)
 
 		// These routes do create, update, delete operations
