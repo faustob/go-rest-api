@@ -1,12 +1,17 @@
 module github.com/benc-uk/go-rest-api
 
-go 1.22
+go 1.25
 
-toolchain go1.24.3
+toolchain go1.25.1
 
 require (
 	github.com/MicahParks/keyfunc/v2 v2.1.0
 	github.com/elastic/go-sysinfo v1.15.3
+	go.opentelemetry.io/otel v1.46.0
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.46.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.46.0
+	go.opentelemetry.io/otel/sdk v1.46.0
+	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	github.com/go-chi/chi v4.1.1+incompatible
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/go-chi/cors v1.2.1

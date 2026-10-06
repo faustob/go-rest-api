@@ -8,6 +8,8 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
 	"regexp"
 	"time"
@@ -31,6 +33,18 @@ var (
 )
 
 func main() {
+	// Build and register the OpenTelemetry SDK (traces + metrics) as the
+	// global provider for this process; flush buffered data on shutdown.
+	otelShutdown, err := setupOTel(context.Background())
+	if err != nil {
+		log.Fatalf("### ❌ failed to set up OpenTelemetry: %v", err)
+	}
+	defer func() {
+		if err := otelShutdown(context.Background()); err != nil {
+			log.Printf("### ⚠️  error shutting down OpenTelemetry: %v", err)
+		}
+	}()
+
 	// Port to listen on, change the default as you see fit
 	serverPort := env.GetEnvInt("PORT", defaultPort)
 
@@ -44,6 +58,11 @@ func main() {
 	router.Use(logging.NewFilteredRequestLogger(regexp.MustCompile(`(^/metrics)|(^/health)`)))
 	router.Use(middleware.Recoverer)
 
+	// OpenTelemetry request metrics (duration, outcome, tenant, slow-request
+	// span events) - registered after Recoverer so panics are still
+	// recovered, and wraps everything below so it also sees auth rejections.
+	router.Use(requestMetricsMiddleware)
+
 	// Some custom middleware for CORS & JWT username
 	router.Use(api.SimpleCORSMiddleware)
 
@@ -54,6 +73,9 @@ func main() {
 
 		jwtValidator := auth.NewJWTValidator(clientID, "https://change_me/jwks_endpoint", "Some.Scope")
 
+		// Auth outcome counter must wrap (be registered before) the JWT
+		// validator so it also observes denied/rejected requests.
+		protectedRouter.Use(authOutcomeMiddleware)
 		protectedRouter.Use(jwtValidator.Middleware)
 
 		// These routes do create, update, delete operations
